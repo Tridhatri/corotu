@@ -1,0 +1,20 @@
+---
+triple:          'arm64-apple-darwin'
+binary-path:     'examples/coro_basic'
+relocations:
+  - { offset: 0x26, size: 0x8, addend: 0x0, symName: _task_a, symObjAddr: 0x0, symBinAddr: 0x100007928, symSize: 0x38 }
+  - { offset: 0x6A, size: 0x8, addend: 0x0, symName: _task_a, symObjAddr: 0x0, symBinAddr: 0x100007928, symSize: 0x38 }
+  - { offset: 0xAC, size: 0x8, addend: 0x0, symName: _task_b, symObjAddr: 0x38, symBinAddr: 0x100007960, symSize: 0x38 }
+  - { offset: 0xEE, size: 0x8, addend: 0x0, symName: _main, symObjAddr: 0x70, symBinAddr: 0x100007998, symSize: 0xE8 }
+  - { offset: 0x513, size: 0x8, addend: 0x0, symName: _coro_create, symObjAddr: 0x0, symBinAddr: 0x100007A80, symSize: 0x128 }
+  - { offset: 0x52C, size: 0x8, addend: 0x0, symName: _t_sched_ctx, symObjAddr: 0x31C, symBinAddr: 0x10000C070, symSize: 0x0 }
+  - { offset: 0x74B, size: 0x8, addend: 0x0, symName: _t_current, symObjAddr: 0x304, symBinAddr: 0x10000C058, symSize: 0x0 }
+  - { offset: 0x896, size: 0x8, addend: 0x0, symName: _coro_create, symObjAddr: 0x0, symBinAddr: 0x100007A80, symSize: 0x128 }
+  - { offset: 0xAD5, size: 0x8, addend: 0x0, symName: _trampoline, symObjAddr: 0x128, symBinAddr: 0x100007BA8, symSize: 0x54 }
+  - { offset: 0xB8E, size: 0x8, addend: 0x0, symName: _coro_resume, symObjAddr: 0x17C, symBinAddr: 0x100007BFC, symSize: 0x64 }
+  - { offset: 0xBF6, size: 0x8, addend: 0x0, symName: _coro_yield, symObjAddr: 0x1E0, symBinAddr: 0x100007C60, symSize: 0x4C }
+  - { offset: 0xC3E, size: 0x8, addend: 0x0, symName: _coro_exit, symObjAddr: 0x22C, symBinAddr: 0x100007CAC, symSize: 0x40 }
+  - { offset: 0xC7E, size: 0x8, addend: 0x0, symName: _coro_destroy, symObjAddr: 0x26C, symBinAddr: 0x100007CEC, symSize: 0x40 }
+  - { offset: 0xCD7, size: 0x8, addend: 0x0, symName: _coro_current, symObjAddr: 0x2AC, symBinAddr: 0x100007D2C, symSize: 0x24 }
+  - { offset: 0xCFC, size: 0x8, addend: 0x0, symName: _clock_now_ns, symObjAddr: 0x2D0, symBinAddr: 0x100007D50, symSize: 0x34 }
+...
