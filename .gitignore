@@ -9,3 +9,4 @@ src/*.o
 
 # macOS
 .DS_Store
+*.dSYM/
