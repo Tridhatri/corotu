@@ -2,7 +2,7 @@
 
 #include <stdint.h>
 #include <stddef.h>
-#include <ucontext.h>
+#include "coro_ctx.h"
 
 #define CORO_DEFAULT_STACK_SIZE (64 * 1024)  /* 64KB per coroutine */
 #define CORO_GUARD_PAGE_SIZE    4096         /* one page below stack, PROT_NONE */
@@ -23,7 +23,7 @@ typedef enum {
 } coro_state_t;
 
 typedef struct coroutine {
-    ucontext_t        ctx;           /* saved register state + stack pointer  */
+    coro_ctx_t        ctx;           /* saved register state + stack pointer  */
     void             *stack;         /* base of usable stack (after guard page) */
     size_t            stack_size;    /* usable stack size in bytes             */
 

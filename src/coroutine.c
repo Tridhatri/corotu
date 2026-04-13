@@ -4,38 +4,54 @@
 #include <time.h>
 #include <sys/mman.h>
 
+#include "coroutine.h"   /* pulls in coro_ctx.h transitively */
+
 /* macOS uses MAP_ANON; Linux exposes MAP_ANONYMOUS */
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif
 
-#include "coroutine.h"
+/* coro_ctx_init: set up ctx to run fn() on stack[0..size].
+ * fn is a no-argument function; data is passed via TLS (t_creating). */
+void coro_ctx_init(coro_ctx_t *ctx, void (*fn)(void), void *stack, size_t size) {
+    memset(ctx, 0, sizeof(*ctx));
+    uint64_t top = (uint64_t)stack + size;
+    top &= ~15ULL;          /* ARM64: sp must be 16-byte aligned */
+    ctx->sp = top;
+    ctx->lr = (uint64_t)fn; /* ret in coro_ctx_swap jumps here on first resume */
+    ctx->fp = 0;
+}
 
 /* -------------------------------------------------------------------------
  * Thread-local state
  *
  * Each OS thread has:
- *   t_current  — which coroutine is running right now (NULL = scheduler)
- *   t_sched_ctx — the saved context of whoever called coro_resume()
- *                 we jump back here on yield/exit
+ *   t_current   — which coroutine is running right now (NULL = scheduler)
+ *   t_sched_ctx — saved context of whoever called coro_resume();
+ *                 yield/exit jump back here
+ *   t_creating  — coroutine being initialised right now; trampoline reads
+ *                 this instead of taking makecontext() arguments, which are
+ *                 broken on macOS ARM64 for 64-bit pointer passing
  * ------------------------------------------------------------------------- */
 static __thread coroutine_t *t_current   = NULL;
-static __thread ucontext_t   t_sched_ctx;
+static __thread coro_ctx_t   t_sched_ctx;
+static __thread coro_ctx_t   t_exit_ctx;   /* throwaway target for coro_exit */
+static __thread coroutine_t *t_creating  = NULL;
 
 
 /* -------------------------------------------------------------------------
  * Trampoline
  *
- * makecontext() only passes int-sized arguments. On 64-bit systems a pointer
- * is 8 bytes but int is 4 bytes, so we split the pointer into two uint32_t
- * halves (hi and lo) and reassemble inside the trampoline.
+ * Zero arguments — avoids the makecontext() int-argument limitation that
+ * causes SIGBUS on macOS ARM64 when splitting a 64-bit pointer into two
+ * 32-bit halves.  The coroutine pointer is handed over via t_creating.
  * ------------------------------------------------------------------------- */
-static void trampoline(unsigned int hi, unsigned int lo) {
-    uintptr_t     ptr = ((uintptr_t)hi << 32) | (uintptr_t)lo;
-    coroutine_t  *c   = (coroutine_t *)ptr;
+static void trampoline(void) {
+    coroutine_t *c = t_creating;
+    t_creating = NULL;          /* clear so it doesn't dangle              */
 
-    c->fn(c->arg);   /* run the actual coroutine function */
-    coro_exit();     /* fn() returned — clean up          */
+    c->fn(c->arg);              /* run the actual coroutine function        */
+    coro_exit();                /* fn() returned — mark DONE, back to sched */
 }
 
 
@@ -84,17 +100,9 @@ coroutine_t *coro_create(void (*fn)(void *), void *arg,
 
     c->stack = (char *)mem + CORO_GUARD_PAGE_SIZE;
 
-    /* Set up the ucontext */
-    getcontext(&c->ctx);
-    c->ctx.uc_stack.ss_sp   = c->stack;
-    c->ctx.uc_stack.ss_size = c->stack_size;
-    c->ctx.uc_link          = NULL; /* we handle exit ourselves in coro_exit() */
-
-    /* Split pointer into two unsigned ints for makecontext */
-    uintptr_t ptr = (uintptr_t)c;
-    makecontext(&c->ctx, (void (*)())trampoline, 2,
-                (unsigned int)(ptr >> 32),
-                (unsigned int)(ptr & 0xFFFFFFFFU));
+    /* Hand the pointer to the trampoline via TLS, then init the context */
+    t_creating = c;
+    coro_ctx_init(&c->ctx, trampoline, c->stack, c->stack_size);
 
     return c;
 }
@@ -115,7 +123,7 @@ void coro_resume(coroutine_t *c) {
      *
      * We return here when the coroutine calls coro_yield() or coro_exit().
      */
-    swapcontext(&t_sched_ctx, &c->ctx);
+    coro_ctx_swap(&t_sched_ctx, &c->ctx);
 
     t_current = NULL;
 }
@@ -135,7 +143,7 @@ void coro_yield(void) {
      * Execution in the coroutine resumes from here next time coro_resume(c)
      * is called.
      */
-    swapcontext(&c->ctx, &t_sched_ctx);
+    coro_ctx_swap(&c->ctx, &t_sched_ctx);
 }
 
 
@@ -146,11 +154,9 @@ void coro_exit(void) {
     coroutine_t *c = t_current;
     if (c) c->state = CORO_DONE;
 
-    /*
-     * setcontext (not swapcontext) — we don't save anything because this
-     * coroutine is finished. Just jump back to the scheduler.
-     */
-    setcontext(&t_sched_ctx);
+    /* Save into throwaway ctx, load scheduler — we don't care what
+     * gets written to t_exit_ctx since this coroutine is finished. */
+    coro_ctx_swap(&t_exit_ctx, &t_sched_ctx);
 
     /* unreachable */
 }
