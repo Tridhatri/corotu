@@ -100,8 +100,6 @@ coroutine_t *coro_create(void (*fn)(void *), void *arg,
 
     c->stack = (char *)mem + CORO_GUARD_PAGE_SIZE;
 
-    /* Hand the pointer to the trampoline via TLS, then init the context */
-    t_creating = c;
     coro_ctx_init(&c->ctx, trampoline, c->stack, c->stack_size);
 
     return c;
@@ -114,14 +112,15 @@ coroutine_t *coro_create(void (*fn)(void *), void *arg,
 void coro_resume(coroutine_t *c) {
     if (c->state != CORO_READY && c->state != CORO_BLOCKED) return;
 
-    t_current = c;
-    c->state  = CORO_RUNNING;
+    t_current  = c;
+    t_creating = c;  /* trampoline reads this on the very first resume only */
+    c->state   = CORO_RUNNING;
 
     /*
-     * swapcontext saves our (scheduler) registers into t_sched_ctx,
-     * then restores c->ctx and jumps into the coroutine.
-     *
-     * We return here when the coroutine calls coro_yield() or coro_exit().
+     * Save scheduler registers into t_sched_ctx, load c->ctx.
+     * On first resume: ret in coro_ctx_swap jumps to trampoline.
+     * On later resumes: ret returns into coro_yield where the coroutine
+     * previously paused — t_creating is set but never read again.
      */
     coro_ctx_swap(&t_sched_ctx, &c->ctx);
 
