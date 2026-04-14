@@ -5,6 +5,7 @@
 #include <sys/mman.h>
 
 #include "coroutine.h"   /* pulls in coro_ctx.h transitively */
+#include "coro_log.h"
 
 /* macOS uses MAP_ANON; Linux exposes MAP_ANONYMOUS */
 #ifndef MAP_ANONYMOUS
@@ -20,6 +21,9 @@ void coro_ctx_init(coro_ctx_t *ctx, void (*fn)(void), void *stack, size_t size) 
     ctx->sp = top;
     ctx->lr = (uint64_t)fn; /* ret in coro_ctx_swap jumps here on first resume */
     ctx->fp = 0;
+
+    CORO_LOG("CTX_INIT   stack_base=0x%lx  stack_top=0x%lx  trampoline=0x%lx",
+             (uintptr_t)stack, (uintptr_t)top, (uintptr_t)fn);
 }
 
 /* -------------------------------------------------------------------------
@@ -50,7 +54,11 @@ static void trampoline(void) {
     coroutine_t *c = t_creating;
     t_creating = NULL;          /* clear so it doesn't dangle              */
 
+    CORO_LOG("TRAMPOLINE id=%04x  first run — entering fn()", CORO_ID(c));
+
     c->fn(c->arg);              /* run the actual coroutine function        */
+
+    CORO_LOG("TRAMPOLINE id=%04x  fn() returned normally", CORO_ID(c));
     coro_exit();                /* fn() returned — mark DONE, back to sched */
 }
 
@@ -87,18 +95,29 @@ coroutine_t *coro_create(void (*fn)(void *), void *arg,
                         PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (mem == MAP_FAILED) {
+        CORO_LOG("CREATE     mmap FAILED — out of memory");
         free(c);
         return NULL;
     }
 
     /* Make guard page inaccessible */
     if (mprotect(mem, CORO_GUARD_PAGE_SIZE, PROT_NONE) != 0) {
+        CORO_LOG("CREATE     mprotect FAILED on guard page");
         munmap(mem, total);
         free(c);
         return NULL;
     }
 
     c->stack = (char *)mem + CORO_GUARD_PAGE_SIZE;
+
+    CORO_LOG("CREATE     id=%04x  fn=%p  "
+             "guard=[%p..%p)  stack=[%p..%p)  "
+             "prio=%d  deadline=%s",
+             CORO_ID(c), (void *)fn,
+             mem,        (char *)mem + CORO_GUARD_PAGE_SIZE,
+             c->stack,   (char *)c->stack + c->stack_size,
+             priority,
+             deadline_ns ? "set" : "none");
 
     coro_ctx_init(&c->ctx, trampoline, c->stack, c->stack_size);
 
@@ -110,7 +129,16 @@ coroutine_t *coro_create(void (*fn)(void *), void *arg,
  * coro_resume  — called from scheduler context to run coroutine c
  * ------------------------------------------------------------------------- */
 void coro_resume(coroutine_t *c) {
-    if (c->state != CORO_READY && c->state != CORO_BLOCKED) return;
+    if (c->state != CORO_READY && c->state != CORO_BLOCKED) {
+        CORO_LOG("RESUME     id=%04x  SKIPPED — state is not READY/BLOCKED (state=%d)",
+                 CORO_ID(c), c->state);
+        return;
+    }
+
+    CORO_LOG("RESUME     id=%04x  %s → RUNNING  "
+             "(swap: scheduler → coroutine)",
+             CORO_ID(c),
+             c->state == CORO_READY ? "READY" : "BLOCKED");
 
     t_current  = c;
     t_creating = c;  /* trampoline reads this on the very first resume only */
@@ -124,6 +152,9 @@ void coro_resume(coroutine_t *c) {
      */
     coro_ctx_swap(&t_sched_ctx, &c->ctx);
 
+    /* ---- we get back here when the coroutine yields or exits ---- */
+    CORO_LOG("RESUME     id=%04x  coroutine returned control to scheduler",
+             CORO_ID(c));
     t_current = NULL;
 }
 
@@ -133,7 +164,13 @@ void coro_resume(coroutine_t *c) {
  * ------------------------------------------------------------------------- */
 void coro_yield(void) {
     coroutine_t *c = t_current;
-    if (!c) return;  /* called outside a coroutine — no-op */
+    if (!c) {
+        CORO_LOG("YIELD      called outside a coroutine — no-op");
+        return;
+    }
+
+    CORO_LOG("YIELD      id=%04x  RUNNING → READY  "
+             "(swap: coroutine → scheduler)", CORO_ID(c));
 
     c->state = CORO_READY;
 
@@ -143,6 +180,9 @@ void coro_yield(void) {
      * is called.
      */
     coro_ctx_swap(&c->ctx, &t_sched_ctx);
+
+    /* ---- we get back here when coro_resume(c) is called again ---- */
+    CORO_LOG("YIELD      id=%04x  resumed — back inside coroutine", CORO_ID(c));
 }
 
 
@@ -151,7 +191,11 @@ void coro_yield(void) {
  * ------------------------------------------------------------------------- */
 void coro_exit(void) {
     coroutine_t *c = t_current;
-    if (c) c->state = CORO_DONE;
+    if (c) {
+        CORO_LOG("EXIT       id=%04x  RUNNING → DONE  "
+                 "(swap: coroutine → scheduler, one-way)", CORO_ID(c));
+        c->state = CORO_DONE;
+    }
 
     /* Save into throwaway ctx, load scheduler — we don't care what
      * gets written to t_exit_ctx since this coroutine is finished. */
@@ -166,6 +210,9 @@ void coro_exit(void) {
  * ------------------------------------------------------------------------- */
 void coro_destroy(coroutine_t *c) {
     if (!c) return;
+
+    CORO_LOG("DESTROY    id=%04x  munmap stack (%zu KB) + free struct",
+             CORO_ID(c), c->stack_size / 1024);
 
     /* stack base = c->stack - CORO_GUARD_PAGE_SIZE */
     void  *mem   = (char *)c->stack - CORO_GUARD_PAGE_SIZE;

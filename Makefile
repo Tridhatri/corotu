@@ -12,6 +12,11 @@ all: $(EXAMPLES)
 examples/coro_basic: examples/coro_basic.c $(SRC)
 	$(CC) $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
+# ── debug build (verbose runtime logging to stderr) ───────────────────────────
+debug:
+	$(CC) $(CFLAGS) -DCORO_DEBUG \
+		-o examples/coro_basic_debug examples/coro_basic.c $(SRC)
+
 # ── sanitizer builds ──────────────────────────────────────────────────────────
 asan:
 	$(CC) $(CFLAGS) -fsanitize=address,undefined \
@@ -23,6 +28,9 @@ tsan:
 
 # ── cleanup ───────────────────────────────────────────────────────────────────
 clean:
-	rm -f $(EXAMPLES) examples/coro_basic_asan examples/coro_basic_tsan
+	rm -f $(EXAMPLES) \
+		examples/coro_basic_debug \
+		examples/coro_basic_asan \
+		examples/coro_basic_tsan
 
-.PHONY: all asan tsan clean
+.PHONY: all debug asan tsan clean
