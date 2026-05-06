@@ -2,6 +2,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <time.h>
+#include <unistd.h>
 #include <sys/mman.h>
 
 #include "coroutine.h"   /* pulls in coro_ctx.h transitively */
@@ -11,6 +12,21 @@
 #ifndef MAP_ANONYMOUS
 #define MAP_ANONYMOUS MAP_ANON
 #endif
+
+/* -------------------------------------------------------------------------
+ * Page size detection
+ *
+ * Different systems have different page sizes (4 KB, 16 KB, 64 KB, etc).
+ * We detect it at runtime to be portable across all systems.
+ * ------------------------------------------------------------------------- */
+static long get_page_size(void) {
+    static long page_size = 0;
+    if (page_size == 0) {
+        page_size = sysconf(_SC_PAGE_SIZE);
+        if (page_size <= 0) page_size = 4096;  /* fallback */
+    }
+    return page_size;
+}
 
 /* coro_ctx_init: set up ctx to run fn() on stack[0..size].
  * fn is a no-argument function; data is passed via TLS (t_creating). */
@@ -86,11 +102,18 @@ coroutine_t *coro_create(void (*fn)(void *), void *arg,
      *   ^                         ^
      *   mem                       c->stack
      *
-     * The stack grows downward on x86_64. If it overflows past c->stack
+     * The stack grows downward on ARM64. If it overflows past c->stack
      * into the guard page, the OS raises SIGSEGV instead of silently
      * corrupting adjacent memory.
+     *
+     * Guard page size = one full page (4 KB on most systems, 16 KB on
+     * Apple Silicon, 64 KB on some ARM systems, etc). We detect the
+     * actual page size at runtime for portability.
      */
-    size_t total = CORO_GUARD_PAGE_SIZE + c->stack_size;
+    long page_size = get_page_size();
+    size_t guard_page_size = page_size;
+    size_t total = guard_page_size + c->stack_size;
+
     void  *mem   = mmap(NULL, total,
                         PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -100,21 +123,22 @@ coroutine_t *coro_create(void (*fn)(void *), void *arg,
         return NULL;
     }
 
-    /* Make guard page inaccessible */
-    if (mprotect(mem, CORO_GUARD_PAGE_SIZE, PROT_NONE) != 0) {
+    /* Make guard page inaccessible (one full page, whatever size it is) */
+    if (mprotect(mem, guard_page_size, PROT_NONE) != 0) {
         CORO_LOG("CREATE     mprotect FAILED on guard page");
         munmap(mem, total);
         free(c);
         return NULL;
     }
 
-    c->stack = (char *)mem + CORO_GUARD_PAGE_SIZE;
+    c->stack = (char *)mem + guard_page_size;
 
     CORO_LOG("CREATE     id=%04x  fn=%p  "
-             "guard=[%p..%p)  stack=[%p..%p)  "
+             "page_size=%ld  guard=[%p..%p)  stack=[%p..%p)  "
              "prio=%d  deadline=%s",
              CORO_ID(c), (void *)fn,
-             mem,        (char *)mem + CORO_GUARD_PAGE_SIZE,
+             page_size,
+             mem,        (char *)mem + guard_page_size,
              c->stack,   (char *)c->stack + c->stack_size,
              priority,
              deadline_ns ? "set" : "none");
@@ -214,9 +238,10 @@ void coro_destroy(coroutine_t *c) {
     CORO_LOG("DESTROY    id=%04x  munmap stack (%zu KB) + free struct",
              CORO_ID(c), c->stack_size / 1024);
 
-    /* stack base = c->stack - CORO_GUARD_PAGE_SIZE */
-    void  *mem   = (char *)c->stack - CORO_GUARD_PAGE_SIZE;
-    size_t total = CORO_GUARD_PAGE_SIZE + c->stack_size;
+    /* stack base = c->stack - page_size (guard page) */
+    long page_size = get_page_size();
+    void  *mem   = (char *)c->stack - page_size;
+    size_t total = page_size + c->stack_size;
     munmap(mem, total);
     free(c);
 }

@@ -5,7 +5,6 @@
 #include "coro_ctx.h"
 
 #define CORO_DEFAULT_STACK_SIZE (64 * 1024)  /* 64KB per coroutine */
-#define CORO_GUARD_PAGE_SIZE    4096         /* one page below stack, PROT_NONE */
 
 /*
  * Coroutine states:
